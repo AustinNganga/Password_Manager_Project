@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Keychain Vault</title>
+<style>
+:root{--teal:#0b2e2b;--teal2:#123f3b;--green:#00a88e;--green2:#007f6b;--mint:#e6f6f2;--bg:#f4f7f6;--ink:#17302d;--mute:#5d7673;--line:#dbe5e3;--red:#c83a3a;--amber:#b7791f;
+--surface:#fff;--font:"Segoe UI","Helvetica Neue",Arial,sans-serif}
+@media(prefers-color-scheme:dark){:root{--bg:#0e1c1a;--surface:#152825;--ink:#e3efec;--mute:#8fa9a5;--line:#244240;--mint:#12332f}}
+*{box-sizing:border-box}body{margin:0;font:15px/1.5 var(--font);background:var(--bg);color:var(--ink)}
+button,input{font:inherit}h1,h2,h3{margin:0;line-height:1.2}
+:focus-visible{outline:3px solid var(--green);outline-offset:2px}
+.btn{background:var(--green);color:#fff;border:0;border-radius:8px;padding:10px 18px;font-weight:600;cursor:pointer}.btn:hover{background:var(--green2)}
+.btn.ghost{background:transparent;color:var(--green2);border:1px solid var(--line)}.btn.danger{background:var(--red)}.btn.sm{padding:6px 12px;font-size:13px}
+input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)}
+label{display:block;font-weight:600;margin:14px 0 6px;font-size:14px}.hint{color:var(--mute);font-size:13px}
+#auth{min-height:100vh;display:grid;grid-template-columns:1.1fr 1fr}
+.brand{background:linear-gradient(160deg,var(--teal),var(--teal2));color:#fff;padding:56px;display:flex;flex-direction:column;justify-content:center}
+.brand h1{font-size:40px;max-width:460px}.brand p{color:#a9d6cf;max-width:420px;font-size:17px}
+.logo{width:44px;height:44px;border-radius:12px;background:var(--green);display:grid;place-items:center;font-size:22px;margin-bottom:28px}
+.brand ul{list-style:none;padding:0;margin:28px 0 0;display:grid;gap:12px;color:#d4efe9}.brand li:before{content:"✓";color:#3ee0c0;margin-right:10px;font-weight:700}
+.card{width:min(400px,90%);margin:auto;padding:8px 0}.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:8px}
+.tabs button{background:none;border:0;padding:10px 16px;color:var(--mute);font-weight:600;cursor:pointer;border-bottom:3px solid transparent}.tabs .on{color:var(--green2);border-color:var(--green)}
+.msg{margin-top:14px;padding:10px 12px;border-radius:8px;font-size:14px;display:none}.msg.err{display:block;background:#fdeaea;color:#8f2020}.msg.ok{display:block;background:var(--mint);color:var(--green2)}
+.meter{height:6px;border-radius:3px;background:var(--line);margin-top:8px;overflow:hidden}.meter i{display:block;height:100%;width:0;transition:width .2s,background .2s}
+#app{display:none;min-height:100vh;grid-template-columns:240px 1fr}.side{background:var(--teal);color:#cfe8e3;padding:24px 16px;display:flex;flex-direction:column;gap:6px}
+.side .who{margin:8px 10px 24px;font-weight:700;color:#fff}.side button{background:none;border:0;color:inherit;text-align:left;padding:11px 12px;border-radius:8px;cursor:pointer}
+.side button.on,.side button:hover{background:var(--teal2);color:#fff}.side .out{margin-top:auto}
+main{padding:32px 40px;max-width:980px}.top{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:20px;flex-wrap:wrap}
+.status{display:inline-flex;gap:8px;align-items:center;padding:6px 12px;border-radius:99px;background:var(--mint);color:var(--green2);font-size:13px;font-weight:600}.status.warn{background:#fdf3dc;color:var(--amber)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:18px}
+.row{display:grid;grid-template-columns:44px 1fr auto;gap:14px;align-items:center;padding:14px 0;border-bottom:1px solid var(--line)}.row:last-child{border:0}
+.ico{width:44px;height:44px;border-radius:12px;background:var(--mint);color:var(--green2);display:grid;place-items:center;font-weight:700;font-size:18px}
+.acts{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.pw{font-family:Consolas,monospace;letter-spacing:.5px}
+.empty{text-align:center;padding:36px 12px;color:var(--mute)}
+dialog{border:0;border-radius:16px;padding:26px;width:min(440px,92vw);background:var(--surface);color:var(--ink)}dialog::backdrop{background:#0b2e2b99}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}pre{background:var(--teal);color:#bfeee3;padding:14px;border-radius:10px;overflow:auto;max-height:220px;font-size:12px;white-space:pre-wrap;word-break:break-all}
+.req{display:grid;gap:14px}.req .panel{margin:0}.badge{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;font-weight:700;background:var(--mint);color:var(--green2)}
+#toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--teal);color:#fff;padding:10px 18px;border-radius:10px;display:none}
+@media(max-width:800px){#auth{grid-template-columns:1fr}.brand{padding:32px}#app{grid-template-columns:1fr}.side{flex-direction:row;flex-wrap:wrap;padding:12px}.side .who,.side .out{margin:0}main{padding:20px}.grid2{grid-template-columns:1fr}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+
+.i{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;vertical-align:-4px;flex:none}
+.btn{display:inline-flex;align-items:center;gap:8px;justify-content:center}.btn.ic{padding:8px;width:34px;height:34px}
+.brand{position:relative;overflow:hidden}.brand>*{position:relative}.brand .deco{position:absolute;right:-60px;bottom:-60px;width:380px;height:380px;stroke:#3ee0c0;opacity:.1;stroke-width:1}
+.logo .i{width:26px;height:26px;stroke:#fff}.side button{display:flex;align-items:center;gap:10px}.side .who{display:flex;align-items:center;gap:10px}
+.avatar{width:34px;height:34px;border-radius:50%;background:var(--green);display:grid;place-items:center;color:#fff;font-weight:700}
+.search{margin:10px 0 4px;padding-left:38px;background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238fa9a5' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M21 21l-4.3-4.3'/%3E%3C/svg%3E") 11px 50%/18px no-repeat}
+button.status{border:0;cursor:default;font:inherit;font-weight:600}button.status.warn{cursor:pointer}button.status.warn:hover{background:#f7e6b8}
+.row:hover .ico{transform:scale(1.06)}.ico{transition:transform .15s;color:#fff;background:var(--green)}
+.empty .i{width:44px;height:44px;color:var(--green);margin-bottom:8px}.chk{display:flex;align-items:center;gap:8px;margin-top:10px;font-weight:400;color:var(--mute);cursor:pointer}.chk input{width:auto}
+.tip{display:flex;gap:10px;background:var(--mint);color:var(--green2);padding:12px 14px;border-radius:10px;font-size:14px}
+</style></head><body><svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/><path d="M12 15v2"/></symbol>
+<symbol id="key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/></symbol>
+<symbol id="flask" viewBox="0 0 24 24"><path d="M9 3h6M10 3v6L4.5 19a2 2 0 001.8 3h11.4a2 2 0 001.8-3L14 9V3"/><path d="M7.5 15h9"/></symbol>
+<symbol id="logout" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></symbol>
+<symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+<symbol id="eye" viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+<symbol id="eyeoff" viewBox="0 0 24 24"><path d="M3 3l18 18M10.6 5.1A9.7 9.7 0 0112 5c6 0 10 7 10 7a17 17 0 01-3.2 4M6.5 6.5A17 17 0 002 12s4 7 10 7a9.6 9.6 0 004.2-1"/></symbol>
+<symbol id="copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/></symbol>
+<symbol id="edit" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/></symbol>
+<symbol id="trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6M10 11v6M14 11v6"/></symbol>
+<symbol id="wand" viewBox="0 0 24 24"><path d="M15 4V2M15 16v-2M8 9H6M24 9h-2M17.8 6.2L19 5M17.8 11.8L19 13M3 21l9-9M12.2 6.2L11 5"/></symbol>
+<symbol id="shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+<symbol id="search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+<symbol id="globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 010 18M12 3a14 14 0 000 18"/></symbol>
+</defs></svg>
+<section id="auth"><div class="brand"><svg class="deco" viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><use href="#shield"/></svg><div class="logo"><svg class="i"><use href="#lock"/></svg></div><h1>Every password, locked behind one.</h1>
+<p>Your vault is encrypted with AES-GCM and a key derived from your master password. We never store the master password itself.</p>
+<ul><li>Site names are hidden, not just passwords</li><li>Tampering and rollbacks are detected on sign-in</li><li>Passwords of every length look identical when stored</li></ul></div>
+<div class="card"><div class="tabs"><button id="tLogin" class="on">Sign in</button><button id="tReg">Create account</button></div>
+<form id="af" autocomplete="off"><label for="u">Username</label><input id="u" required minlength="3" maxlength="32" autocomplete="username">
+<label for="p">Master password</label><input id="p" type="password" required minlength="8" autocomplete="current-password">
+<label class="chk"><input type="checkbox" id="sp">Show password</label><div class="meter" id="aMeter" hidden><i></i></div><div class="hint" id="aHint" hidden>Use 12+ characters. If you forget it, your vault can't be recovered.</div>
+<div style="margin-top:20px"><button class="btn" id="aBtn" style="width:100%">Sign in</button></div><div class="msg" id="aMsg"></div></form></div></section>
+
+<div id="app"><nav class="side"><div class="who"><span class="avatar" id="av"></span><span id="who"></span></div>
+<button data-v="vault" class="on"><svg class="i"><use href="#key"/></svg>Vault</button><button data-v="lab"><svg class="i"><use href="#flask"/></svg>Security Lab</button><button class="out" id="out"><svg class="i"><use href="#logout"/></svg>Lock and sign out</button></nav>
+<main><div class="top"><h2 id="vt">Vault</h2><button class="status" id="anchor" type="button"></button></div>
+<section id="vault"><div class="panel"><div class="top" style="margin:0 0 6px"><div><b id="cnt"></b><div class="hint">Site names and passwords are stored encrypted.</div></div><button class="btn" id="add"><svg class="i"><use href="#plus"/></svg>Add password</button></div><input id="q" class="search" placeholder="Search your passwords" aria-label="Search your passwords"><div id="list"></div></div></section>
+<section id="lab" hidden><div class="req">
+<div class="panel"><div class="tip"><svg class="i"><use href="#shield"/></svg><span>These demos run real attacks on your stored vault. Nothing in your saved data is changed.</span></div><h3 style="margin-top:14px">Re-enter your master password to run the attacks</h3><input id="labpw" type="password" placeholder="Master password" style="margin-top:10px"></div>
+<div class="panel"><h3>1. What an attacker sees on disk</h3><p class="hint">Keys are HMAC tags, not domain names. Every ciphertext has the same length, so password lengths leak nothing.</p><button class="btn sm" id="raw">Show stored database</button><p id="rawInfo"></p><pre id="rawOut" hidden></pre></div>
+<div class="panel"><h3>2. Swap attack</h3><p class="hint">Swaps the encrypted records of two sites, with no checksum supplied. AES-GCM binds each record to its own site tag, so the swap fails.</p>
+<div class="grid2"><input id="s1" placeholder="First site"><input id="s2" placeholder="Second site"></div><p><button class="btn sm" id="swap">Run swap attack</button></p><div class="msg" id="swapMsg"></div></div>
+<div class="panel"><h3>3. Rollback attack</h3><p class="hint">Restores the previous saved version and loads it against the checksum kept on your device. Change a password first so an older version exists.</p><button class="btn sm" id="roll">Run rollback attack</button><div class="msg" id="rollMsg"></div></div>
+<div class="panel"><h3>4. Wrong password and tampering</h3><p class="hint">Sign out and enter a wrong master password: load fails the password check. Clear this device's checksum below, sign in again and the rollback check turns off (the swap defense still works).</p><button class="btn ghost sm" id="clr">Clear this device's checksum</button></div></div></section></main></div>
+
+<dialog id="dlg"><form method="dialog" id="df"><h3 id="dt">Add password</h3>
+<label for="fs">Website</label><input id="fs" required maxlength="64" placeholder="www.example.com"><label for="fu">Username or email</label><input id="fu" maxlength="64">
+<label for="fp">Password</label><div style="display:flex;gap:8px"><input id="fp" required maxlength="64"><button type="button" class="btn ghost sm" id="gen" title="Generate a strong password"><svg class="i"><use href="#wand"/></svg>Generate</button></div>
+<div class="meter" id="fMeter"><i></i></div><div class="hint">Up to 64 characters.</div><div class="msg" id="dMsg"></div>
+<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:20px"><button type="button" class="btn ghost" id="dx">Cancel</button><button class="btn" id="ds">Save password</button></div></form></dialog>
+<div id="toast"></div>
+<script>
+const $=s=>document.querySelector(s);let mode="login",user=null;
+const api=async(p,b)=>{const r=await fetch("/api/"+p,{method:b===undefined?"GET":"POST",headers:{"Content-Type":"application/json"},body:b===undefined?undefined:JSON.stringify(b)});
+  const j=await r.json();if(r.status===401&&j.error&&/Session/.test(j.error)){showAuth("Your session timed out. Sign in again.")}if(!r.ok)throw j;return j};
+const toast=t=>{const e=$("#toast");e.textContent=t;e.style.display="block";setTimeout(()=>e.style.display="none",2200)};
+const msg=(e,t,c)=>{e.className="msg "+c;e.textContent=t};
+const chkKey=()=>"chk:"+user, getChk=()=>localStorage.getItem(chkKey()), setChk=c=>c&&localStorage.setItem(chkKey(),c);
+function strength(p){let s=0;if(p.length>=8)s++;if(p.length>=12)s++;if(/[A-Z]/.test(p)&&/[a-z]/.test(p))s++;if(/\d/.test(p))s++;if(/[^A-Za-z0-9]/.test(p))s++;return s}
+function meter(id,p){const s=strength(p),i=$(id+" i");i.style.width=s*20+"%";i.style.background=["#c83a3a","#c83a3a","#b7791f","#b7791f","#00a88e","#00a88e"][s]}
+function setMode(m){mode=m;$("#tLogin").className=m=="login"?"on":"";$("#tReg").className=m=="reg"?"on":"";$("#aBtn").textContent=m=="login"?"Sign in":"Create account";
+  $("#aMeter").hidden=$("#aHint").hidden=m=="login";$("#p").autocomplete=m=="login"?"current-password":"new-password";$("#aMsg").className="msg"}
+$("#tLogin").onclick=()=>setMode("login");$("#tReg").onclick=()=>setMode("reg");$("#p").oninput=e=>meter("#aMeter",e.target.value);$("#fp").oninput=e=>meter("#fMeter",e.target.value);
+$("#af").onsubmit=async e=>{e.preventDefault();const b=$("#aBtn");b.disabled=true;user=$("#u").value.trim().toLowerCase();
+  try{const j=await api(mode=="login"?"login":"register",{username:user,password:$("#p").value,checksum:mode=="login"?getChk():undefined});
+    setChk(j.checksum);$("#p").value="";enter(j.verified)}
+  catch(x){msg($("#aMsg"),x.tamper?"Warning: this vault does not match the checksum saved on this device. It was modified or rolled back. Don't trust it.":(x.error||"Something went wrong"),"err")}
+  b.disabled=false};
+function enter(verified){$("#auth").style.display="none";$("#app").style.display="grid";$("#who").textContent=user;$("#av").textContent=user[0].toUpperCase();anchor();load()}
+function showAuth(t){$("#app").style.display="none";$("#auth").style.display="grid";if(t)msg($("#aMsg"),t,"err")}
+function anchor(){const a=$("#anchor"),has=!!getChk();a.className="status"+(has?"":" warn");
+  a.innerHTML='<svg class="i"><use href="#shield"/></svg>'+(has?"Integrity check is on":"Integrity check is off. Click to turn on");a.title=has?"This device remembers your vault's checksum":"Trust the current vault and save its checksum on this device"}
+$("#anchor").onclick=async()=>{if(getChk()||!confirm("Only turn this on if you trust the vault as it is right now. From then on, this device will warn you if the vault is changed or rolled back."))return;const j=await api("checksum",{});setChk(j.checksum);anchor();toast("Integrity check is on")};
+async function load(){const j=await api("list");$("#cnt").textContent=j.items.length+(j.items.length==1?" saved password":" saved passwords");
+  $("#list").innerHTML=j.items.length?"":'<div class="empty">'+'<svg class="i"><use href="#lock"/></svg><br><b>Your vault is empty</b><br>Click <b>Add password</b> to save your first one. It is encrypted before it is stored.</div>';
+  for(const it of j.items){const r=document.createElement("div");r.className="row";r.innerHTML='<div class="ico"></div><div><b></b><div class="hint"></div></div><div class="acts"></div>';
+    r.querySelector(".ico").textContent=it.site[0].toUpperCase();r.querySelector("b").textContent=it.site;r.querySelector(".hint").textContent=it.username||"No username";
+    const a=r.querySelector(".acts"),btn=(n,t,f,c)=>{const x=document.createElement("button");x.className="btn sm ic "+(c||"ghost");x.title=t;x.setAttribute("aria-label",t);x.innerHTML='<svg class="i"><use href="#'+n+'"/></svg>';x.onclick=f;a.append(x);return x};
+    let shown=false;const h=r.querySelector(".hint"),reveal=btn("eye","Show password",async()=>{shown=!shown;if(!shown){h.textContent=it.username||"No username";h.classList.remove("pw")}else{const g=await api("get",{site:it.site});h.textContent=g.password;h.classList.add("pw")}reveal.querySelector("use").setAttribute("href",shown?"#eyeoff":"#eye");reveal.title=shown?"Hide password":"Show password"});
+    btn("copy","Copy password",async()=>{const g=await api("get",{site:it.site});await navigator.clipboard.writeText(g.password);toast("Password copied")});
+    btn("edit","Edit",async()=>{const g=await api("get",{site:it.site});openDlg(it.site,it.username,g.password)});
+    btn("trash","Delete",async()=>{if(!confirm("Delete the password for "+it.site+"?"))return;const j=await api("remove",{site:it.site});setChk(j.checksum);anchor();toast("Deleted");load()},"danger");
+    r.dataset.s=(it.site+" "+it.username).toLowerCase();let hue=0;for(const c of it.site)hue=(hue*31+c.charCodeAt(0))%360;r.querySelector(".ico").style.background="hsl("+hue+",55%,38%)";
+    $("#list").append(r)}filt()}
+const filt=()=>{const q=$("#q").value.trim().toLowerCase();document.querySelectorAll("#list .row").forEach(r=>r.hidden=!!q&&!r.dataset.s.includes(q))};$("#q").oninput=filt;$("#sp").onchange=e=>$("#p").type=e.target.checked?"text":"password";
+function openDlg(s,u,p){$("#dt").textContent=s?"Edit password":"Add password";$("#fs").value=s||"";$("#fs").readOnly=!!s;$("#fu").value=u||"";$("#fp").value=p||"";meter("#fMeter",p||"");$("#dMsg").className="msg";$("#dlg").showModal()}
+$("#add").onclick=()=>openDlg();$("#dx").onclick=()=>$("#dlg").close();
+$("#gen").onclick=()=>{const c="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*",a=crypto.getRandomValues(new Uint32Array(20));$("#fp").value=[...a].map(n=>c[n%c.length]).join("");meter("#fMeter",$("#fp").value)};
+$("#df").onsubmit=async e=>{e.preventDefault();try{const j=await api("set",{site:$("#fs").value,username:$("#fu").value,password:$("#fp").value});setChk(j.checksum);anchor();$("#dlg").close();toast("Saved");load()}catch(x){msg($("#dMsg"),x.error||"Could not save","err")}};
+document.querySelectorAll(".side [data-v]").forEach(b=>b.onclick=()=>{document.querySelectorAll(".side [data-v]").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  $("#vault").hidden=b.dataset.v!="vault";$("#lab").hidden=b.dataset.v!="lab";$("#vt").textContent=b.dataset.v=="lab"?"Security Lab":"Vault"});
+$("#out").onclick=async()=>{await api("logout",{});user=null;showAuth()};
+const lab=async(p,extra,el)=>{try{return await api("lab/"+p,{password:$("#labpw").value,...extra})}catch(x){if(el)msg(el,x.error||"Failed","err");return null}};
+$("#raw").onclick=async()=>{const j=await lab("raw",{});if(!j)return;$("#rawOut").hidden=false;$("#rawOut").textContent=j.repr;
+  $("#rawInfo").innerHTML=j.records+" records. Ciphertext lengths: <span class='badge'>"+j.ciphertextLengths.join(", ")+" bytes</span> "+(j.ciphertextLengths.length==1?"(all identical)":"")};
+$("#swap").onclick=async()=>{const j=await lab("swap",{site1:$("#s1").value,site2:$("#s2").value},$("#swapMsg"));if(j&&!j.error)msg($("#swapMsg"),j.detected?"Attack blocked: "+j.message:j.message,j.detected?"ok":"err")};
+$("#roll").onclick=async()=>{const j=await lab("rollback",{},$("#rollMsg"));if(j&&!j.error)msg($("#rollMsg"),j.detected?"Attack blocked: "+j.message:j.message,j.detected?"ok":"err")};
+$("#clr").onclick=()=>{localStorage.removeItem(chkKey());anchor();toast("Checksum cleared on this device")};
+</script></body></html>
