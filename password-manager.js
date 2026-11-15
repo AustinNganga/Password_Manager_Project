@@ -269,7 +269,35 @@ class Keychain {
     * Return Type: Promise<string>
     */
   async get(name) {
-    throw "Not Implemented!";
+    if (typeof name !== "string") {
+      throw "Domain name must be a string";
+    }
+
+    // The deterministic HMAC tag is the lookup key, keeping get() O(1)
+    // without exposing the domain name in the serialized KVS.
+    const tagBytes = await subtle.sign("HMAC", this.secrets.hmacKey, stringToBuffer(name));
+    const tag = encodeBuffer(tagBytes);
+    if (!Object.prototype.hasOwnProperty.call(this.data.kvs, tag)) {
+      return null;
+    }
+
+    const record = this.data.kvs[tag];
+    try {
+      const plaintext = await subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: decodeBuffer(record.iv),
+          // Binding the ciphertext to its HMAC tag detects swapped records,
+          // independently of the optional SHA-256 dump checksum.
+          additionalData: tagBytes
+        },
+        this.secrets.aesKey,
+        decodeBuffer(record.ct)
+      );
+      return Keychain.unpadPassword(plaintext);
+    } catch (e) {
+      throw "Corrupted or swapped password record";
+    }
   };
 
   /** 
@@ -283,7 +311,25 @@ class Keychain {
   * Return Type: void
   */
   async set(name, value) {
-    throw "Not Implemented!";
+    if (typeof name !== "string") {
+      throw "Domain name must be a string";
+    }
+    if (typeof value !== "string") {
+      throw "Password must be a string";
+    }
+
+    const tagBytes = await subtle.sign("HMAC", this.secrets.hmacKey, stringToBuffer(name));
+    const tag = encodeBuffer(tagBytes);
+    const iv = getRandomBytes(IV_LENGTH);
+    const ciphertext = await subtle.encrypt(
+      { name: "AES-GCM", iv: iv, additionalData: tagBytes },
+      this.secrets.aesKey,
+      Keychain.padPassword(value)
+    );
+
+    // A deterministic tag replaces the existing value on update; every write
+    // still uses a new IV so encrypting the same value twice yields new ciphertext.
+    this.data.kvs[tag] = { iv: encodeBuffer(iv), ct: encodeBuffer(ciphertext) };
   };
 
   /**
@@ -295,7 +341,17 @@ class Keychain {
     * Return Type: Promise<boolean>
   */
   async remove(name) {
-    throw "Not Implemented!";
+    if (typeof name !== "string") {
+      throw "Domain name must be a string";
+    }
+
+    const tagBytes = await subtle.sign("HMAC", this.secrets.hmacKey, stringToBuffer(name));
+    const tag = encodeBuffer(tagBytes);
+    if (!Object.prototype.hasOwnProperty.call(this.data.kvs, tag)) {
+      return false;
+    }
+    delete this.data.kvs[tag];
+    return true;
   };
 };
 
