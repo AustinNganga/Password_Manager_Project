@@ -10,172 +10,248 @@ const { subtle } = require('crypto').webcrypto;
 const PBKDF2_ITERATIONS = 100000; // number of iterations for PBKDF2 algorithm
 const MAX_PASSWORD_LENGTH = 64;   // we can assume no password is longer than this many characters
 
-// Fixed size of a padded password block: 2-byte length prefix + 64 chars * 4 bytes (max UTF-8 size)
+// --- Additional constants (Student 1) ---
+const SALT_LENGTH = 16;           // 128-bit random salt for PBKDF2 (as recommended in the handout)
+const IV_LENGTH = 12;             // 96-bit IV, the recommended size for AES-GCM
+// Every password is encrypted inside a fixed-size block so ciphertext length reveals nothing.
+// Layout: [2-byte big-endian length][password bytes][zero fill].
+// A character can take up to 4 UTF-8 bytes, so the data area is MAX_PASSWORD_LENGTH * 4 bytes.
 const PADDED_LENGTH = 2 + MAX_PASSWORD_LENGTH * 4;
-const CANARY_PLAINTEXT = "KEYCHAIN-CANARY-v1";
-const CANARY_AAD = "keychain-canary";
-const IV_LENGTH = 12;
+// Labels used to derive two independent sub-keys from the PBKDF2 master key (HMAC used as a PRF)
+const HMAC_KEY_LABEL = "keychain/v1/domain-hmac-key";
+const AES_KEY_LABEL = "keychain/v1/aes-gcm-key";
+// Known value encrypted at init time so load() can detect a wrong master password
+const CANARY_PLAINTEXT = "keychain/v1/password-check";
+const CANARY_AAD = "canary";
 
 /********* Implementation ********/
-
-/*
- * CONTRACT (shared by all three students)
- *   this.data    = { salt, canary, kvs }   <- PUBLIC, this is exactly what dump() serializes
- *                    salt   : Base64 string (16 random bytes, stored in the clear)
- *                    canary : Base64 string (iv || AES-GCM ciphertext of a known value)
- *                    kvs    : { Base64(HMAC(hmacKey, domain)) : Base64(iv || ciphertext) }
- *   this.secrets = { hmacKey, aesKey }     <- PRIVATE CryptoKeys, never serialized
- */
 class Keychain {
-
-  /******************************************************************
-   *  STUDENT 1 PART: constructor, init, key derivation, padding, canary
-   *  (reconstructed from the documented contract -- replace with
-   *   Student 1's real code if it differs)
-   ******************************************************************/
-
+  /**
+   * Initializes the keychain using the provided information. Note that external
+   * users should likely never invoke the constructor directly and instead use
+   * either Keychain.init or Keychain.load. 
+   * Arguments:
+   *  You may design the constructor with any parameters you would like. 
+   * Return Type: void
+   */
   constructor({ salt, canary, kvs, hmacKey, aesKey }) {
-    this.data = { salt, canary, kvs };
-    this.secrets = { hmacKey, aesKey };
+    if (typeof salt !== "string" || canary === undefined || !hmacKey || !aesKey) {
+      throw "Keychain constructor: missing salt, canary or keys";
+    }
+
+    /* ===================== SHARED CONTRACT (all 3 students) =====================
+     * this.data    -> PUBLIC state. dump() serializes exactly this object with
+     *                 JSON.stringify(this.data), so everything here must be JSON-safe
+     *                 and must not leak anything secret.
+     *   data.salt   : Base64 string, 16 random bytes (PBKDF2 salt, stored in the clear)
+     *   data.canary : { iv: Base64, ct: Base64 }  AES-GCM encryption of a known value,
+     *                 used ONLY by load() to detect a wrong master password
+     *   data.kvs    : plain object { Base64(HMAC(hmacKey, domain)) : <record> }
+     *                 (<record> format is defined by set(); it must carry its own IV)
+     *
+     * this.secrets -> PRIVATE state. Never serialized, never logged.
+     *   secrets.hmacKey : CryptoKey (HMAC-SHA-256, usages ["sign","verify"])
+     *                     -> used to turn a domain name into its kvs key
+     *   secrets.aesKey  : CryptoKey (AES-GCM 256, usages ["encrypt","decrypt"])
+     *                     -> used to encrypt/decrypt the padded passwords
+     * ============================================================================ */
+    this.data = {
+      salt: salt,
+      canary: canary,
+      kvs: kvs === undefined ? {} : kvs
+    };
+    this.secrets = {
+      hmacKey: hmacKey,
+      aesKey: aesKey
+    };
   };
 
-  // Exactly ONE PBKDF2 call. PBKDF2 -> master key k (HMAC key) -> two sub-keys via HMAC(k, label).
+  /* ------------------------------------------------------------------------
+   * Helper functions (Student 1). Students 2 and 3 call these; do not
+   * re-implement them elsewhere in the file.
+   * ---------------------------------------------------------------------- */
+
+  /**
+    * Derives the two working keys from the master password. This is the ONLY
+    * place PBKDF2 is called, and it is called once per invocation.
+    *
+    *   PBKDF2(password, salt) -> master key k (HMAC key, never exported)
+    *   hmacKey = import( HMAC(k, HMAC_KEY_LABEL) )   // for hashing domain names
+    *   aesKey  = import( HMAC(k, AES_KEY_LABEL) )    // for AES-GCM
+    *
+    * Arguments:
+    *   password: string
+    *   salt:     buffer (raw bytes, NOT Base64)
+    * Return Type: Promise<{ hmacKey: CryptoKey, aesKey: CryptoKey }>
+    */
   static async deriveKeys(password, salt) {
-    const pwKey = await subtle.importKey("raw", stringToBuffer(password), "PBKDF2", false, ["deriveKey"]);
+    const passwordKey = await subtle.importKey(
+      "raw", stringToBuffer(password), "PBKDF2", false, ["deriveKey"]);
+
+    // The single (slow) PBKDF2 call. Output is a non-extractable HMAC key.
     const masterKey = await subtle.deriveKey(
       { name: "PBKDF2", salt: salt, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
-      pwKey,
+      passwordKey,
       { name: "HMAC", hash: "SHA-256", length: 256 },
       false,
-      ["sign"]
-    );
-    const hmacRaw = await subtle.sign("HMAC", masterKey, stringToBuffer("hmac-key-for-domain-names"));
-    const aesRaw = await subtle.sign("HMAC", masterKey, stringToBuffer("aes-gcm-key-for-passwords"));
-    const hmacKey = await subtle.importKey("raw", hmacRaw, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-    const aesKey = await subtle.importKey("raw", aesRaw, "AES-GCM", false, ["encrypt", "decrypt"]);
+      ["sign"]);
+
+    // HMAC as a PRF: two different inputs give two independent pseudorandom sub-keys
+    const hmacKeyBytes = await subtle.sign("HMAC", masterKey, stringToBuffer(HMAC_KEY_LABEL));
+    const aesKeyBytes = await subtle.sign("HMAC", masterKey, stringToBuffer(AES_KEY_LABEL));
+
+    const hmacKey = await subtle.importKey(
+      "raw", hmacKeyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+    const aesKey = await subtle.importKey(
+      "raw", aesKeyBytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+
     return { hmacKey, aesKey };
   }
 
-  static padPassword(str) {
-    if (typeof str !== "string" || str.length > MAX_PASSWORD_LENGTH) {
-      throw "Password must be a string of at most " + MAX_PASSWORD_LENGTH + " characters";
+  /**
+    * Pads a password to a fixed-size block (length hiding, Short-answer Q1).
+    * Throws if the password is longer than MAX_PASSWORD_LENGTH characters.
+    *
+    * Arguments:
+    *   value: string
+    * Return Type: Uint8Array (always exactly PADDED_LENGTH bytes)
+    */
+  static padPassword(value) {
+    if (typeof value !== "string") {
+      throw "Password must be a string";
     }
-    const bytes = stringToBuffer(str);
-    const block = new Uint8Array(PADDED_LENGTH); // zero filled
-    block[0] = (bytes.length >> 8) & 0xff;
-    block[1] = bytes.length & 0xff;
-    block.set(bytes, 2);
-    return block;
+    if (value.length > MAX_PASSWORD_LENGTH) {
+      throw "Password exceeds the maximum length of " + MAX_PASSWORD_LENGTH + " characters";
+    }
+    const bytes = stringToBuffer(value);
+    if (bytes.length > PADDED_LENGTH - 2) {
+      throw "Password is too large to pad";   // defensive: cannot happen for <= 64 chars
+    }
+    const padded = new Uint8Array(PADDED_LENGTH);   // zero-filled
+    padded[0] = (bytes.length >> 8) & 0xff;
+    padded[1] = bytes.length & 0xff;
+    padded.set(bytes, 2);
+    return padded;
   }
 
-  static unpadPassword(block) {
-    const len = (block[0] << 8) | block[1];
-    if (len > PADDED_LENGTH - 2) throw "Corrupted record: bad length";
-    return bufferToString(block.slice(2, 2 + len));
+  /**
+    * Inverse of padPassword. Call it on the output of AES-GCM decryption.
+    *
+    * Arguments:
+    *   padded: buffer (exactly PADDED_LENGTH bytes)
+    * Return Type: string
+    */
+  static unpadPassword(padded) {
+    const buf = new Uint8Array(padded);
+    if (buf.length !== PADDED_LENGTH) {
+      throw "Corrupted record: unexpected padded length";
+    }
+    const len = (buf[0] << 8) | buf[1];
+    if (len > PADDED_LENGTH - 2) {
+      throw "Corrupted record: invalid length prefix";
+    }
+    return bufferToString(buf.slice(2, 2 + len));
   }
 
+  /**
+    * Encrypts a known value under aesKey. Stored in data.canary by init so that
+    * load() can tell whether the supplied master password is correct.
+    *
+    * Arguments:
+    *   aesKey: CryptoKey
+    * Return Type: Promise<{ iv: string, ct: string }>   (both Base64)
+    */
   static async createCanary(aesKey) {
     const iv = getRandomBytes(IV_LENGTH);
     const ct = await subtle.encrypt(
       { name: "AES-GCM", iv: iv, additionalData: stringToBuffer(CANARY_AAD) },
-      aesKey, stringToBuffer(CANARY_PLAINTEXT));
-    return encodeBuffer(Buffer.concat([Buffer.from(iv), Buffer.from(ct)]));
+      aesKey,
+      stringToBuffer(CANARY_PLAINTEXT));
+    return { iv: encodeBuffer(iv), ct: encodeBuffer(ct) };
   }
-
-  // Throws if the key is wrong or the canary was tampered with.
-  static async verifyCanary(aesKey, canary) {
-    const raw = decodeBuffer(canary);
-    const pt = await subtle.decrypt(
-      { name: "AES-GCM", iv: raw.subarray(0, IV_LENGTH), additionalData: stringToBuffer(CANARY_AAD) },
-      aesKey, raw.subarray(IV_LENGTH));
-    if (bufferToString(pt) !== CANARY_PLAINTEXT) throw "Canary mismatch";
-    return true;
-  }
-
-  static async init(password) {
-    const salt = getRandomBytes(16);
-    const { hmacKey, aesKey } = await Keychain.deriveKeys(password, salt);
-    const canary = await Keychain.createCanary(aesKey);
-    return new Keychain({ salt: encodeBuffer(salt), canary: canary, kvs: {}, hmacKey: hmacKey, aesKey: aesKey });
-  }
-
-  /******************************************************************
-   *  STUDENT 2 PART: set, get, remove
-   *  (stand-in written from the contract so that Student 3's part can
-   *   be tested -- replace with Student 2's real code)
-   ******************************************************************/
-
-  // Base64(HMAC(hmacKey, name)) -- the key under which a domain is stored
-  async _domainKey(name) {
-    const tag = await subtle.sign("HMAC", this.secrets.hmacKey, stringToBuffer(name));
-    return encodeBuffer(tag);
-  }
-
-  async set(name, value) {
-    const key = await this._domainKey(name);
-    const iv = getRandomBytes(IV_LENGTH); // fresh random IV every time
-    const ct = await subtle.encrypt(
-      { name: "AES-GCM", iv: iv, additionalData: decodeBuffer(key) }, // tag bound as AAD = swap defense
-      this.secrets.aesKey, Keychain.padPassword(value));
-    this.data.kvs[key] = encodeBuffer(Buffer.concat([Buffer.from(iv), Buffer.from(ct)]));
-  };
-
-  async get(name) {
-    const key = await this._domainKey(name);
-    if (!Object.prototype.hasOwnProperty.call(this.data.kvs, key)) return null;
-    const raw = decodeBuffer(this.data.kvs[key]);
-    let pt;
-    try {
-      pt = await subtle.decrypt(
-        { name: "AES-GCM", iv: raw.subarray(0, IV_LENGTH), additionalData: decodeBuffer(key) },
-        this.secrets.aesKey, raw.subarray(IV_LENGTH));
-    } catch (e) {
-      throw "Tampering detected: record failed authentication";
-    }
-    return Keychain.unpadPassword(new Uint8Array(pt));
-  };
-
-  async remove(name) {
-    const key = await this._domainKey(name);
-    if (!Object.prototype.hasOwnProperty.call(this.data.kvs, key)) return false;
-    delete this.data.kvs[key];
-    return true;
-  };
-
-  /******************************************************************
-   *  STUDENT 3 PART: dump, load  (persistence + integrity)
-   ******************************************************************/
 
   /**
-    * Returns [ JSON string of this.data, Base64(SHA-256(that exact string)) ].
-    * The second element goes to trusted storage and is the rollback defense.
-    * Run-time: O(n) (JSON.stringify + one hash over the n records).
+    * Checks the canary. Throws if the master password is wrong (the derived
+    * AES key differs, so GCM authentication fails) or if the canary was tampered with.
+    * Student 3 calls this from load().
+    *
+    * Arguments:
+    *   aesKey: CryptoKey
+    *   canary: { iv: string, ct: string }   (as read from the serialized data)
+    * Return Type: Promise<void>
     */
-  async dump() {
-    const repr = JSON.stringify(this.data);
-    const checksum = encodeBuffer(await subtle.digest("SHA-256", stringToBuffer(repr)));
-    return [repr, checksum];
-  };
+  static async verifyCanary(aesKey, canary) {
+    let plaintext;
+    try {
+      const ptBuf = await subtle.decrypt(
+        { name: "AES-GCM", iv: decodeBuffer(canary.iv), additionalData: stringToBuffer(CANARY_AAD) },
+        aesKey,
+        decodeBuffer(canary.ct));
+      plaintext = bufferToString(ptBuf);
+    } catch (e) {
+      throw "Invalid master password or corrupted keychain";
+    }
+    if (plaintext !== CANARY_PLAINTEXT) {
+      throw "Invalid master password or corrupted keychain";
+    }
+  }
+
+  /** 
+    * Creates an empty keychain with the given password.
+    *
+    * Arguments:
+    *   password: string
+    * Return Type: void
+    */
+  static async init(password) {
+    // Fresh random 128-bit salt, stored in the clear in data.salt
+    const salt = getRandomBytes(SALT_LENGTH);
+
+    // One PBKDF2 call, then HMAC-derived sub-keys
+    const { hmacKey, aesKey } = await Keychain.deriveKeys(password, salt);
+
+    // Known-value ciphertext so load() can verify the master password later
+    const canary = await Keychain.createCanary(aesKey);
+
+    return new Keychain({
+      salt: encodeBuffer(salt),
+      canary: canary,
+      kvs: {},
+      hmacKey: hmacKey,
+      aesKey: aesKey
+    });
+  }
 
   /**
-    * Loads a keychain from the output of dump().
-    *  1. If trustedDataCheck is given, hash the exact repr string and compare (rollback defense).
-    *  2. Parse JSON and do a basic structure check.
-    *  3. Re-derive keys from the password + stored salt (a single PBKDF2 call).
-    *  4. Verify the password by decrypting the canary (wrong password => GCM failure => throw).
-    *  5. Build the Keychain from the parsed kvs field.
-    * Run-time: O(n) (hash + JSON.parse); the key derivation is O(1).
+    * Loads the keychain state from the provided representation (repr). The
+    * repr variable will contain a JSON encoded serialization of the contents
+    * of the KVS (as returned by the dump function). The trustedDataCheck
+    * is an *optional* SHA-256 checksum that can be used to validate the 
+    * integrity of the contents of the KVS. If the checksum is provided and the
+    * integrity check fails, an exception should be thrown. You can assume that
+    * the representation passed to load is well-formed (i.e., it will be
+    * a valid JSON object).Returns a Keychain object that contains the data
+    * from repr. 
+    *
+    * Arguments:
+    *   password:           string
+    *   repr:               string
+    *   trustedDataCheck: string
+    * Return Type: Keychain
     */
   static async load(password, repr, trustedDataCheck) {
-    // 1. Rollback / tamper check against trusted storage (only if provided)
+    // Student 3 - persistence + integrity.
+    // Step 1: rollback/tamper defense. Only runs if a trusted checksum was supplied.
+    // We hash the exact string we were given (no re-serialization), so any change
+    // to the dump, including an old-but-valid version, produces a different hash.
     if (trustedDataCheck !== undefined && trustedDataCheck !== null) {
       const actual = encodeBuffer(await subtle.digest("SHA-256", stringToBuffer(repr)));
       if (actual !== trustedDataCheck) {
-        throw "Tampering detected: checksum does not match trusted data (modified or rolled-back database)";
+        throw "Tampering detected: checksum does not match the trusted value (modified or rolled-back keychain)";
       }
     }
 
-    // 2. Parse + structure check
+    // Step 2: parse and sanity-check the structure (salt, canary, kvs must exist).
     let parsed;
     try {
       parsed = JSON.parse(repr);
@@ -183,27 +259,148 @@ class Keychain {
       throw "Invalid keychain representation";
     }
     if (parsed === null || typeof parsed !== "object" ||
-        typeof parsed.salt !== "string" || typeof parsed.canary !== "string" ||
+        typeof parsed.salt !== "string" ||
+        parsed.canary === null || typeof parsed.canary !== "object" ||
+        typeof parsed.canary.iv !== "string" || typeof parsed.canary.ct !== "string" ||
         parsed.kvs === null || typeof parsed.kvs !== "object" || Array.isArray(parsed.kvs)) {
       throw "Invalid keychain representation";
     }
 
-    // 3. Re-derive keys (exactly ONE PBKDF2 call)
+    // Step 3: re-derive the keys. This is the ONLY PBKDF2 call in load().
+    // The salt is stored in the clear as Base64, so decode it back to bytes first.
     const { hmacKey, aesKey } = await Keychain.deriveKeys(password, decodeBuffer(parsed.salt));
 
-    // 4. Password verification via the canary
-    let ok;
-    try {
-      ok = await Keychain.verifyCanary(aesKey, parsed.canary);
-    } catch (e) {
-      ok = false;
-    }
-    if (ok === false) {
-      throw "Invalid master password (or the keychain was tampered with)";
+    // Step 4: password check. verifyCanary throws if the password is wrong
+    // (different key -> AES-GCM authentication fails) or the canary was altered.
+    await Keychain.verifyCanary(aesKey, parsed.canary);
+
+    // Step 5: rebuild the keychain FROM the parsed kvs field, so changes to the
+    // serialized kvs are reflected in the restored object.
+    return new Keychain({
+      salt: parsed.salt,
+      canary: parsed.canary,
+      kvs: parsed.kvs,
+      hmacKey: hmacKey,
+      aesKey: aesKey
+    });
+  };
+
+  /**
+    * Returns a JSON serialization of the contents of the keychain that can be 
+    * loaded back using the load function. The return value should consist of
+    * an array of two strings:
+    *   arr[0] = JSON encoding of password manager
+    *   arr[1] = SHA-256 checksum (as a string)
+    * As discussed in the handout, the first element of the array should contain
+    * all of the data in the password manager. The second element is a SHA-256
+    * checksum computed over the password manager to preserve integrity.
+    *
+    * Return Type: array
+    */ 
+  async dump() {
+    // Student 3 - serialize only the PUBLIC state (salt, canary, kvs).
+    // this.secrets (the CryptoKeys) is never included.
+    const repr = JSON.stringify(this.data);
+
+    // SHA-256 over that exact string, Base64 encoded. The caller keeps this in
+    // trusted storage; load() compares against it to detect rollback/tampering.
+    const checksum = encodeBuffer(await subtle.digest("SHA-256", stringToBuffer(repr)));
+    return [repr, checksum];
+  };
+
+  /**
+    * Fetches the data (as a string) corresponding to the given domain from the KVS.
+    * If there is no entry in the KVS that matches the given domain, then return
+    * null.
+    *
+    * Arguments:
+    *   name: string
+    * Return Type: Promise<string>
+    */
+  async get(name) {
+    if (typeof name !== "string") {
+      throw "Domain name must be a string";
     }
 
-    // 5. Restore. We use parsed.kvs, so edits to the kvs field are reflected in the object.
-    return new Keychain({ salt: parsed.salt, canary: parsed.canary, kvs: parsed.kvs, hmacKey: hmacKey, aesKey: aesKey });
+    // The deterministic HMAC tag is the lookup key, keeping get() O(1)
+    // without exposing the domain name in the serialized KVS.
+    const tagBytes = await subtle.sign("HMAC", this.secrets.hmacKey, stringToBuffer(name));
+    const tag = encodeBuffer(tagBytes);
+    if (!Object.prototype.hasOwnProperty.call(this.data.kvs, tag)) {
+      return null;
+    }
+
+    const record = this.data.kvs[tag];
+    try {
+      const plaintext = await subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: decodeBuffer(record.iv),
+          // Binding the ciphertext to its HMAC tag detects swapped records,
+          // independently of the optional SHA-256 dump checksum.
+          additionalData: tagBytes
+        },
+        this.secrets.aesKey,
+        decodeBuffer(record.ct)
+      );
+      return Keychain.unpadPassword(plaintext);
+    } catch (e) {
+      throw "Corrupted or swapped password record";
+    }
+  };
+
+  /** 
+  * Inserts the domain and associated data into the KVS. If the domain is
+  * already in the password manager, this method should update its value. If
+  * not, create a new entry in the password manager.
+  *
+  * Arguments:
+  *   name: string
+  *   value: string
+  * Return Type: void
+  */
+  async set(name, value) {
+    if (typeof name !== "string") {
+      throw "Domain name must be a string";
+    }
+    if (typeof value !== "string") {
+      throw "Password must be a string";
+    }
+
+    const tagBytes = await subtle.sign("HMAC", this.secrets.hmacKey, stringToBuffer(name));
+    const tag = encodeBuffer(tagBytes);
+    const iv = getRandomBytes(IV_LENGTH);
+    const ciphertext = await subtle.encrypt(
+      { name: "AES-GCM", iv: iv, additionalData: tagBytes },
+      this.secrets.aesKey,
+      Keychain.padPassword(value)
+    );
+
+    // A deterministic tag replaces the existing value on update; every write
+    // still uses a new IV so encrypting the same value twice yields new ciphertext.
+    this.data.kvs[tag] = { iv: encodeBuffer(iv), ct: encodeBuffer(ciphertext) };
+  };
+
+  /**
+    * Removes the record with name from the password manager. Returns true
+    * if the record with the specified name is removed, false otherwise.
+    *
+    * Arguments:
+    *   name: string
+    * Return Type: Promise<boolean>
+  */
+  async remove(name) {
+    if (typeof name !== "string") {
+      throw "Domain name must be a string";
+    }
+
+    const tagBytes = await subtle.sign("HMAC", this.secrets.hmacKey, stringToBuffer(name));
+    const tag = encodeBuffer(tagBytes);
+    if (!Object.prototype.hasOwnProperty.call(this.data.kvs, tag)) {
+      return false;
+    }
+    delete this.data.kvs[tag];
+    return true;
   };
 };
 
